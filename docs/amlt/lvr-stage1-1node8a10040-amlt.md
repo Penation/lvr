@@ -4,7 +4,8 @@ Target requested for Singularity:
 
 ```text
 name: msrresrchvc
-workspace: gcr-singularity-resrch
+workspace: wsgcrrbt
+resource group: gcr-singularity-resrch
 GPU: A100 40GB
 shape: 1 node × 8 GPUs
 ```

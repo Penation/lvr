@@ -19,7 +19,7 @@ env_defaults:
 
 target:
   service: sing
-  workspace_name: gcr-singularity-resrch
+  workspace_name: wsgcrrbt
   name: msrresrchvc
 
 storage:

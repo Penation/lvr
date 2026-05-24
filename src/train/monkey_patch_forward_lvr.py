@@ -170,11 +170,11 @@ def qwen2_5_mixed_modality_forward_lvr(
     # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
     if not lvr_mode_switch and (pixel_values is None and pixel_values_videos is None):
         # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-        dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+        dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
         
-        dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-        image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+        dummy_pixel = dummy_pixel.type(self.visual.dtype)
+        image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
         # Operates as maksed_scatter for the image tokens
         # However the values are all zeros so it dosen't affect the embeddings.
         # This could avoid deepspeed error when some batch only has texts.
@@ -182,8 +182,8 @@ def qwen2_5_mixed_modality_forward_lvr(
             
     if pixel_values is not None:
             
-        image_embeds = self.model.get_image_features(pixel_values, image_grid_thw)
-        image_embeds = torch.cat(image_embeds, dim=0)
+        pixel_values = pixel_values.type(self.visual.dtype)
+        image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
     
         n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
         n_image_features = image_embeds.shape[0]
@@ -249,8 +249,8 @@ def qwen2_5_mixed_modality_forward_lvr(
             else:
                 '''re-encode target area'''
                 # Now lvr_tokens is pixel_values of the cropped targets
-                selected_lvr_embeds = self.model.get_image_features(lvr_tokens, lvr_tokens_thw)
-                selected_lvr_embeds = torch.cat(selected_lvr_embeds, dim=0)
+                lvr_tokens = lvr_tokens.type(self.visual.dtype)
+                selected_lvr_embeds = self.visual(lvr_tokens, grid_thw=lvr_tokens_thw)
                 inputs_embeds[batch_indices, seq_positions] = selected_lvr_embeds
 
     if attention_mask is not None:
@@ -269,27 +269,27 @@ def qwen2_5_mixed_modality_forward_lvr(
                 (cache_position is not None and cache_position[0] == 0)
                 or (past_key_values is None or past_key_values.get_seq_length() == 0)
             )
-            if (prefill_compiled_stage or prefill_noncompiled_stage) or self.model.rope_deltas is None:
-                position_ids, rope_deltas = self.model.get_rope_index(
+            if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+                position_ids, rope_deltas = self.get_rope_index(
                     input_ids,
                     image_grid_thw,
                     video_grid_thw,
                     second_per_grid_ts=second_per_grid_ts,
                     attention_mask=attention_mask,
                 )
-                self.model.rope_deltas = rope_deltas
+                self.rope_deltas = rope_deltas
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
                 position_ids = torch.arange(seq_length, device=inputs_embeds.device)
                 position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
                 if cache_position is not None:
-                    delta = (cache_position[0] + self.model.rope_deltas).to(inputs_embeds.device)
+                    delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
                 else:
                     delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
                 delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
                 position_ids += delta.to(position_ids.device)
 
-    outputs = self.model.language_model(
+    outputs = self.model(
             input_ids=None,
             position_ids=position_ids,
             attention_mask=attention_mask,
@@ -312,8 +312,8 @@ def qwen2_5_mixed_modality_forward_lvr(
     loss_ce = None
     loss_lvr = None
     if labels is not None:
-        # Upcast to float if we need to compute the loss to avoid potential precision issues
-        logits = logits.float()
+        # Keep logits in the model dtype to avoid a full-vocabulary fp32 copy on long packed sequences.
+        # CrossEntropyLoss supports bf16/fp16 logits and internally uses stable kernels.
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -349,7 +349,7 @@ def qwen2_5_mixed_modality_forward_lvr(
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
         attentions=outputs.attentions,
-        rope_deltas=self.model.rope_deltas,
+        rope_deltas=self.rope_deltas,
         last_position_hidden_state =last_position_hidden_state
     )
 
@@ -410,11 +410,11 @@ def qwen2_5_mixed_modality_forward_lvr_inference(
     # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
     # if not lvr_mode_switch and (pixel_values is None and pixel_values_videos is None):
     #     # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-    #     dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-    #     dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+    #     dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+    #     dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
         
-    #     dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-    #     image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+    #     dummy_pixel = dummy_pixel.type(self.visual.dtype)
+    #     image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
     #     # Operates as maksed_scatter for the image tokens
     #     # However the values are all zeros so it dosen't affect the embeddings.
     #     # This could avoid deepspeed error when some batch only has texts.
@@ -422,8 +422,8 @@ def qwen2_5_mixed_modality_forward_lvr_inference(
             
     if pixel_values is not None:
             
-        image_embeds = self.model.get_image_features(pixel_values, image_grid_thw)
-        image_embeds = torch.cat(image_embeds, dim=0)
+        pixel_values = pixel_values.type(self.visual.dtype)
+        image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
     
         n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
         n_image_features = image_embeds.shape[0]
@@ -489,8 +489,8 @@ def qwen2_5_mixed_modality_forward_lvr_inference(
             else:
                 '''re-encode target area'''
                 # Now lvr_tokens is pixel_values of the cropped targets
-                selected_lvr_embeds = self.model.get_image_features(lvr_tokens, lvr_tokens_thw)
-                selected_lvr_embeds = torch.cat(selected_lvr_embeds, dim=0)
+                lvr_tokens = lvr_tokens.type(self.visual.dtype)
+                selected_lvr_embeds = self.visual(lvr_tokens, grid_thw=lvr_tokens_thw)
                 inputs_embeds[batch_indices, seq_positions] = selected_lvr_embeds
 
     if attention_mask is not None:
@@ -509,27 +509,27 @@ def qwen2_5_mixed_modality_forward_lvr_inference(
                 (cache_position is not None and cache_position[0] == 0)
                 or (past_key_values is None or past_key_values.get_seq_length() == 0)
             )
-            if (prefill_compiled_stage or prefill_noncompiled_stage) or self.model.rope_deltas is None:
-                position_ids, rope_deltas = self.model.get_rope_index(
+            if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+                position_ids, rope_deltas = self.get_rope_index(
                     input_ids,
                     image_grid_thw,
                     video_grid_thw,
                     second_per_grid_ts=second_per_grid_ts,
                     attention_mask=attention_mask,
                 )
-                self.model.rope_deltas = rope_deltas
+                self.rope_deltas = rope_deltas
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
                 position_ids = torch.arange(seq_length, device=inputs_embeds.device)
                 position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
                 if cache_position is not None:
-                    delta = (cache_position[0] + self.model.rope_deltas).to(inputs_embeds.device)
+                    delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
                 else:
                     delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
                 delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
                 position_ids += delta.to(position_ids.device)
 
-    outputs = self.model.language_model(
+    outputs = self.model(
             input_ids=None,
             position_ids=position_ids,
             attention_mask=attention_mask,
@@ -553,8 +553,8 @@ def qwen2_5_mixed_modality_forward_lvr_inference(
     loss_ce = None
     loss_lvr = None
     if labels is not None:
-        # Upcast to float if we need to compute the loss to avoid potential precision issues
-        logits = logits.float()
+        # Keep logits in the model dtype to avoid a full-vocabulary fp32 copy on long packed sequences.
+        # CrossEntropyLoss supports bf16/fp16 logits and internally uses stable kernels.
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -590,7 +590,7 @@ def qwen2_5_mixed_modality_forward_lvr_inference(
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
         attentions=outputs.attentions,
-        rope_deltas=self.model.rope_deltas,
+        rope_deltas=self.rope_deltas,
         last_position_hidden_state =last_position_hidden_state
     )
 
@@ -648,11 +648,11 @@ def qwen2_5_mixed_modality_forward_lvr_with_head(
     # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
     if not lvr_mode_switch and (pixel_values is None and pixel_values_videos is None):
         # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-        dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+        dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
         
-        dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-        image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+        dummy_pixel = dummy_pixel.type(self.visual.dtype)
+        image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
         # Operates as maksed_scatter for the image tokens
         # However the values are all zeros so it dosen't affect the embeddings.
         # This could avoid deepspeed error when some batch only has texts.
@@ -663,8 +663,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head(
         # with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float32):
         #     # Ensure vision tower inputs are float32
         #     pixel_values = pixel_values.to(torch.float32) 
-        image_embeds = self.model.get_image_features(pixel_values, image_grid_thw)
-        image_embeds = torch.cat(image_embeds, dim=0)
+        pixel_values = pixel_values.type(self.visual.dtype)
+        image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
 
 
         n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
@@ -730,8 +730,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head(
             else:
                 '''re-encode target area'''
                 # Now lvr_tokens is pixel_values of the cropped targets
-                selected_lvr_embeds = self.model.get_image_features(lvr_tokens, lvr_tokens_thw)
-                selected_lvr_embeds = torch.cat(selected_lvr_embeds, dim=0)
+                lvr_tokens = lvr_tokens.type(self.visual.dtype)
+                selected_lvr_embeds = self.visual(lvr_tokens, grid_thw=lvr_tokens_thw)
                 inputs_embeds[batch_indices, seq_positions] = selected_lvr_embeds
 
             
@@ -752,27 +752,27 @@ def qwen2_5_mixed_modality_forward_lvr_with_head(
             (cache_position is not None and cache_position[0] == 0)
             or (past_key_values is None or past_key_values.get_seq_length() == 0)
         )
-        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.model.rope_deltas is None:
-            position_ids, rope_deltas = self.model.get_rope_index(
+        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+            position_ids, rope_deltas = self.get_rope_index(
                 input_ids,
                 image_grid_thw,
                 video_grid_thw,
                 second_per_grid_ts=second_per_grid_ts,
                 attention_mask=attention_mask,
             )
-            self.model.rope_deltas = rope_deltas
+            self.rope_deltas = rope_deltas
         else:
             batch_size, seq_length, _ = inputs_embeds.shape
             position_ids = torch.arange(seq_length, device=inputs_embeds.device)
             position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
             if cache_position is not None:
-                delta = (cache_position[0] + self.model.rope_deltas).to(inputs_embeds.device)
+                delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
             else:
                 delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
             delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
             position_ids += delta.to(position_ids.device)
 
-    outputs = self.model.language_model(
+    outputs = self.model(
         input_ids=None,
         position_ids=position_ids,
         attention_mask=attention_mask,
@@ -807,8 +807,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head(
     loss_ce = None
     loss_lvr = None
     if labels is not None:
-        # Upcast to float if we need to compute the loss to avoid potential precision issues
-        logits = logits.float()
+        # Keep logits in the model dtype to avoid a full-vocabulary fp32 copy on long packed sequences.
+        # CrossEntropyLoss supports bf16/fp16 logits and internally uses stable kernels.
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -845,7 +845,7 @@ def qwen2_5_mixed_modality_forward_lvr_with_head(
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
         attentions=outputs.attentions,
-        rope_deltas=self.model.rope_deltas,
+        rope_deltas=self.rope_deltas,
         last_position_hidden_state =last_position_hidden_state
     )
 
@@ -901,11 +901,11 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_inference(
     # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
     if not lvr_mode_switch and (pixel_values is None and pixel_values_videos is None):
         # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-        dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+        dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
         
-        dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-        image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+        dummy_pixel = dummy_pixel.type(self.visual.dtype)
+        image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
         # Operates as maksed_scatter for the image tokens
         # However the values are all zeros so it dosen't affect the embeddings.
         # This could avoid deepspeed error when some batch only has texts.
@@ -916,8 +916,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_inference(
         # with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float32):
         #     # Ensure vision tower inputs are float32
         #     pixel_values = pixel_values.to(torch.float32) 
-        image_embeds = self.model.get_image_features(pixel_values, image_grid_thw)
-        image_embeds = torch.cat(image_embeds, dim=0)
+        pixel_values = pixel_values.type(self.visual.dtype)
+        image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
 
 
         n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
@@ -983,8 +983,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_inference(
             else:
                 '''re-encode target area'''
                 # Now lvr_tokens is pixel_values of the cropped targets
-                selected_lvr_embeds = self.model.get_image_features(lvr_tokens, lvr_tokens_thw)
-                selected_lvr_embeds = torch.cat(selected_lvr_embeds, dim=0)
+                lvr_tokens = lvr_tokens.type(self.visual.dtype)
+                selected_lvr_embeds = self.visual(lvr_tokens, grid_thw=lvr_tokens_thw)
                 inputs_embeds[batch_indices, seq_positions] = selected_lvr_embeds
 
             
@@ -1005,27 +1005,27 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_inference(
             (cache_position is not None and cache_position[0] == 0)
             or (past_key_values is None or past_key_values.get_seq_length() == 0)
         )
-        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.model.rope_deltas is None:
-            position_ids, rope_deltas = self.model.get_rope_index(
+        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+            position_ids, rope_deltas = self.get_rope_index(
                 input_ids,
                 image_grid_thw,
                 video_grid_thw,
                 second_per_grid_ts=second_per_grid_ts,
                 attention_mask=attention_mask,
             )
-            self.model.rope_deltas = rope_deltas
+            self.rope_deltas = rope_deltas
         else:
             batch_size, seq_length, _ = inputs_embeds.shape
             position_ids = torch.arange(seq_length, device=inputs_embeds.device)
             position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
             if cache_position is not None:
-                delta = (cache_position[0] + self.model.rope_deltas).to(inputs_embeds.device)
+                delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
             else:
                 delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
             delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
             position_ids += delta.to(position_ids.device)
 
-    outputs = self.model.language_model(
+    outputs = self.model(
         input_ids=None,
         position_ids=position_ids,
         attention_mask=attention_mask,
@@ -1065,8 +1065,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_inference(
     loss_ce = None
     loss_lvr = None
     if labels is not None:
-        # Upcast to float if we need to compute the loss to avoid potential precision issues
-        logits = logits.float()
+        # Keep logits in the model dtype to avoid a full-vocabulary fp32 copy on long packed sequences.
+        # CrossEntropyLoss supports bf16/fp16 logits and internally uses stable kernels.
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -1103,7 +1103,7 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_inference(
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
         attentions=outputs.attentions,
-        rope_deltas=self.model.rope_deltas,
+        rope_deltas=self.rope_deltas,
         last_position_hidden_state =last_position_hidden_state
     )
 
@@ -1158,11 +1158,11 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_modeSwitchLoss(
     # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
     if not lvr_mode_switch and (pixel_values is None and pixel_values_videos is None):
         # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-        dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+        dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
         
-        dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-        image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+        dummy_pixel = dummy_pixel.type(self.visual.dtype)
+        image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
         # Operates as maksed_scatter for the image tokens
         # However the values are all zeros so it dosen't affect the embeddings.
         # This could avoid deepspeed error when some batch only has texts.
@@ -1173,8 +1173,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_modeSwitchLoss(
         # with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float32):
         #     # Ensure vision tower inputs are float32
         #     pixel_values = pixel_values.to(torch.float32) 
-        image_embeds = self.model.get_image_features(pixel_values, image_grid_thw)
-        image_embeds = torch.cat(image_embeds, dim=0)
+        pixel_values = pixel_values.type(self.visual.dtype)
+        image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
 
 
         n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
@@ -1254,27 +1254,27 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_modeSwitchLoss(
             (cache_position is not None and cache_position[0] == 0)
             or (past_key_values is None or past_key_values.get_seq_length() == 0)
         )
-        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.model.rope_deltas is None:
-            position_ids, rope_deltas = self.model.get_rope_index(
+        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+            position_ids, rope_deltas = self.get_rope_index(
                 input_ids,
                 image_grid_thw,
                 video_grid_thw,
                 second_per_grid_ts=second_per_grid_ts,
                 attention_mask=attention_mask,
             )
-            self.model.rope_deltas = rope_deltas
+            self.rope_deltas = rope_deltas
         else:
             batch_size, seq_length, _ = inputs_embeds.shape
             position_ids = torch.arange(seq_length, device=inputs_embeds.device)
             position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
             if cache_position is not None:
-                delta = (cache_position[0] + self.model.rope_deltas).to(inputs_embeds.device)
+                delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
             else:
                 delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
             delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
             position_ids += delta.to(position_ids.device)
 
-    outputs = self.model.language_model(
+    outputs = self.model(
         input_ids=None,
         position_ids=position_ids,
         attention_mask=attention_mask,
@@ -1309,8 +1309,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_modeSwitchLoss(
     loss_ce = None
     loss_lvr = None
     if labels is not None:
-        # Upcast to float if we need to compute the loss to avoid potential precision issues
-        logits = logits.float()
+        # Keep logits in the model dtype to avoid a full-vocabulary fp32 copy on long packed sequences.
+        # CrossEntropyLoss supports bf16/fp16 logits and internally uses stable kernels.
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -1367,7 +1367,7 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_modeSwitchLoss(
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
         attentions=outputs.attentions,
-        rope_deltas=self.model.rope_deltas,
+        rope_deltas=self.rope_deltas,
         last_position_hidden_state =last_position_hidden_state
     )
 
@@ -1423,11 +1423,11 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_latentEndToken(
     # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
     if not lvr_mode_switch and (pixel_values is None and pixel_values_videos is None):
         # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-        dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+        dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
         
-        dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-        image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+        dummy_pixel = dummy_pixel.type(self.visual.dtype)
+        image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
         # Operates as maksed_scatter for the image tokens
         # However the values are all zeros so it dosen't affect the embeddings.
         # This could avoid deepspeed error when some batch only has texts.
@@ -1438,8 +1438,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_latentEndToken(
         # with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float32):
         #     # Ensure vision tower inputs are float32
         #     pixel_values = pixel_values.to(torch.float32) 
-        image_embeds = self.model.get_image_features(pixel_values, image_grid_thw)
-        image_embeds = torch.cat(image_embeds, dim=0)
+        pixel_values = pixel_values.type(self.visual.dtype)
+        image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
 
 
         n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
@@ -1525,27 +1525,27 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_latentEndToken(
             (cache_position is not None and cache_position[0] == 0)
             or (past_key_values is None or past_key_values.get_seq_length() == 0)
         )
-        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.model.rope_deltas is None:
-            position_ids, rope_deltas = self.model.get_rope_index(
+        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+            position_ids, rope_deltas = self.get_rope_index(
                 input_ids,
                 image_grid_thw,
                 video_grid_thw,
                 second_per_grid_ts=second_per_grid_ts,
                 attention_mask=attention_mask,
             )
-            self.model.rope_deltas = rope_deltas
+            self.rope_deltas = rope_deltas
         else:
             batch_size, seq_length, _ = inputs_embeds.shape
             position_ids = torch.arange(seq_length, device=inputs_embeds.device)
             position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
             if cache_position is not None:
-                delta = (cache_position[0] + self.model.rope_deltas).to(inputs_embeds.device)
+                delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
             else:
                 delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
             delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
             position_ids += delta.to(position_ids.device)
 
-    outputs = self.model.language_model(
+    outputs = self.model(
         input_ids=None,
         position_ids=position_ids,
         attention_mask=attention_mask,
@@ -1586,8 +1586,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_latentEndToken(
     loss_ce = None
     loss_lvr = None
     if labels is not None:
-        # Upcast to float if we need to compute the loss to avoid potential precision issues
-        logits = logits.float()
+        # Keep logits in the model dtype to avoid a full-vocabulary fp32 copy on long packed sequences.
+        # CrossEntropyLoss supports bf16/fp16 logits and internally uses stable kernels.
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -1632,7 +1632,7 @@ def qwen2_5_mixed_modality_forward_lvr_with_head_with_latentEndToken(
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
         attentions=outputs.attentions,
-        rope_deltas=self.model.rope_deltas,
+        rope_deltas=self.rope_deltas,
         last_position_hidden_state =last_position_hidden_state
     )
 
@@ -1689,11 +1689,11 @@ def qwen2_5_mixed_modality_forward_lvr_with_latentEndToken(
     # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
     if not lvr_mode_switch and (pixel_values is None and pixel_values_videos is None):
         # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-        dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+        dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
         
-        dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-        image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+        dummy_pixel = dummy_pixel.type(self.visual.dtype)
+        image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
         # Operates as maksed_scatter for the image tokens
         # However the values are all zeros so it dosen't affect the embeddings.
         # This could avoid deepspeed error when some batch only has texts.
@@ -1704,8 +1704,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_latentEndToken(
         # with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float32):
         #     # Ensure vision tower inputs are float32
         #     pixel_values = pixel_values.to(torch.float32) 
-        image_embeds = self.model.get_image_features(pixel_values, image_grid_thw)
-        image_embeds = torch.cat(image_embeds, dim=0)
+        pixel_values = pixel_values.type(self.visual.dtype)
+        image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
 
 
         n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
@@ -1791,27 +1791,27 @@ def qwen2_5_mixed_modality_forward_lvr_with_latentEndToken(
             (cache_position is not None and cache_position[0] == 0)
             or (past_key_values is None or past_key_values.get_seq_length() == 0)
         )
-        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.model.rope_deltas is None:
-            position_ids, rope_deltas = self.model.get_rope_index(
+        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+            position_ids, rope_deltas = self.get_rope_index(
                 input_ids,
                 image_grid_thw,
                 video_grid_thw,
                 second_per_grid_ts=second_per_grid_ts,
                 attention_mask=attention_mask,
             )
-            self.model.rope_deltas = rope_deltas
+            self.rope_deltas = rope_deltas
         else:
             batch_size, seq_length, _ = inputs_embeds.shape
             position_ids = torch.arange(seq_length, device=inputs_embeds.device)
             position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
             if cache_position is not None:
-                delta = (cache_position[0] + self.model.rope_deltas).to(inputs_embeds.device)
+                delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
             else:
                 delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
             delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
             position_ids += delta.to(position_ids.device)
 
-    outputs = self.model.language_model(
+    outputs = self.model(
         input_ids=None,
         position_ids=position_ids,
         attention_mask=attention_mask,
@@ -1835,8 +1835,8 @@ def qwen2_5_mixed_modality_forward_lvr_with_latentEndToken(
     loss_ce = None
     loss_lvr = None
     if labels is not None:
-        # Upcast to float if we need to compute the loss to avoid potential precision issues
-        logits = logits.float()
+        # Keep logits in the model dtype to avoid a full-vocabulary fp32 copy on long packed sequences.
+        # CrossEntropyLoss supports bf16/fp16 logits and internally uses stable kernels.
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -1881,7 +1881,7 @@ def qwen2_5_mixed_modality_forward_lvr_with_latentEndToken(
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
         attentions=outputs.attentions,
-        rope_deltas=self.model.rope_deltas,
+        rope_deltas=self.rope_deltas,
         last_position_hidden_state =last_position_hidden_state
     )
 
@@ -1936,11 +1936,11 @@ def qwen2_5_mixed_modality_forward_lvr_rl(
     # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
     if not lvr_mode_switch and (pixel_values is None and pixel_values_videos is None):
         # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-        dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+        dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+        dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
         
-        dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-        image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+        dummy_pixel = dummy_pixel.type(self.visual.dtype)
+        image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
         # Operates as maksed_scatter for the image tokens
         # However the values are all zeros so it dosen't affect the embeddings.
         # This could avoid deepspeed error when some batch only has texts.
@@ -1951,8 +1951,8 @@ def qwen2_5_mixed_modality_forward_lvr_rl(
         # with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float32):
         #     # Ensure vision tower inputs are float32
         #     pixel_values = pixel_values.to(torch.float32) 
-        image_embeds = self.model.get_image_features(pixel_values, image_grid_thw)
-        image_embeds = torch.cat(image_embeds, dim=0)
+        pixel_values = pixel_values.type(self.visual.dtype)
+        image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
 
 
         n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
@@ -1998,21 +1998,21 @@ def qwen2_5_mixed_modality_forward_lvr_rl(
             (cache_position is not None and cache_position[0] == 0)
             or (past_key_values is None or past_key_values.get_seq_length() == 0)
         )
-        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.model.rope_deltas is None:
-            position_ids, rope_deltas = self.model.get_rope_index(
+        if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+            position_ids, rope_deltas = self.get_rope_index(
                 input_ids,
                 image_grid_thw,
                 video_grid_thw,
                 second_per_grid_ts=second_per_grid_ts,
                 attention_mask=attention_mask,
             )
-            self.model.rope_deltas = rope_deltas
+            self.rope_deltas = rope_deltas
         else:
             batch_size, seq_length, _ = inputs_embeds.shape
             position_ids = torch.arange(seq_length, device=inputs_embeds.device)
             position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
             if cache_position is not None:
-                delta = (cache_position[0] + self.model.rope_deltas).to(inputs_embeds.device)
+                delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
             else:
                 delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
             delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
@@ -2045,8 +2045,8 @@ def qwen2_5_mixed_modality_forward_lvr_rl(
     loss_ce = None
     loss_lvr = None
     if labels is not None:
-        # Upcast to float if we need to compute the loss to avoid potential precision issues
-        logits = logits.float()
+        # Keep logits in the model dtype to avoid a full-vocabulary fp32 copy on long packed sequences.
+        # CrossEntropyLoss supports bf16/fp16 logits and internally uses stable kernels.
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -2077,7 +2077,7 @@ def qwen2_5_mixed_modality_forward_lvr_rl(
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
         attentions=outputs.attentions,
-        rope_deltas=self.model.rope_deltas,
+        rope_deltas=self.rope_deltas,
         last_position_hidden_state =last_position_hidden_state
     )
 
@@ -2122,19 +2122,19 @@ def qwen2_5_mixed_modality_forward_lvr_rl(
 #         # Pass dummy image and dummy grid to the visual model to avoid deepspeed error.
 #         if pixel_values is None and pixel_values_videos is None:
 #             # Create dummy pixel_values and grid_thw for avoiding deepspeed error.
-#             dummy_pixel = torch.zeros(784, 1176).to(self.model.visual.device)
-#             dummy_grid = torch.tensor([[1, 28, 28]]).to(self.model.visual.device)
+#             dummy_pixel = torch.zeros(784, 1176).to(self.visual.device)
+#             dummy_grid = torch.tensor([[1, 28, 28]]).to(self.visual.device)
             
-#             dummy_pixel = dummy_pixel.type(self.model.visual.dtype)
-#             image_embeds = self.model.visual(dummy_pixel, grid_thw=dummy_grid)
+#             dummy_pixel = dummy_pixel.type(self.visual.dtype)
+#             image_embeds = self.visual(dummy_pixel, grid_thw=dummy_grid)
 #             # Operates as maksed_scatter for the image tokens
 #             # However the values are all zeros so it dosen't affect the embeddings.
 #             # This could avoid deepspeed error when some batch only has texts.
 #             inputs_embeds += image_embeds.mean() * 0
             
 #         if pixel_values is not None:
-#             pixel_values = pixel_values.type(self.model.visual.dtype)
-#             image_embeds = self.model.visual(pixel_values, grid_thw=image_grid_thw)
+#             pixel_values = pixel_values.type(self.visual.dtype)
+#             image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
 #             n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
 #             n_image_features = image_embeds.shape[0]
 #             if n_image_tokens != n_image_features:
@@ -2186,8 +2186,8 @@ def qwen2_5_mixed_modality_forward_lvr_rl(
 
 
 #         if pixel_values_videos is not None:
-#             pixel_values_videos = pixel_values_videos.type(self.model.visual.dtype)
-#             video_embeds = self.model.visual(pixel_values_videos, grid_thw=video_grid_thw)
+#             pixel_values_videos = pixel_values_videos.type(self.visual.dtype)
+#             video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
 #             n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
 #             n_video_features = video_embeds.shape[0]
 #             if n_video_tokens != n_video_features:
@@ -2280,7 +2280,7 @@ def qwen2_5_mixed_modality_forward_lvr_rl(
 #         logits = self.lm_head(hidden_states)
 #         if labels is not None:
 #             # Upcast to float if we need to compute the loss to avoid potential precision issues
-#             logits = logits.float()
+#             logits kept in model dtype
 #             # Shift so that tokens < n predict n
 #             shift_logits = logits[..., :-1, :].contiguous()
 #             shift_labels = labels[..., 1:].contiguous()

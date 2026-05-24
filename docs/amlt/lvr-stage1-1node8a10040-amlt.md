@@ -58,7 +58,7 @@ export PYTHONPATH=$PWD:$PWD/src:${PYTHONPATH:-}
 export WANDB_MODE=offline
 export CACHE_DIR=${CACHE_ROOT}/hf
 
-deepspeed --num_gpus=${GPUS} src/train/train_lvr.py \
+python -m deepspeed.launcher.runner --num_gpus=${GPUS} src/train/train_lvr.py \
   --run_name "Stage1_8xA10040_mseLVRLossLambda0.1-MaxVisToken5120-MinVisToken128" \
   --coconut True \
   --loss_lvr_fct mse \

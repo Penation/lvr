@@ -4,7 +4,7 @@ env_defaults:
   NODES: 1
   GPUS: 8
   MEM: 40
-  JOB_NAME: lvr-stage1-1node8gpu-a10040-no-flash-v3
+  JOB_NAME: lvr-stage1-1node8gpu-a10040-no-flash-v4
   REPO_URL: https://github.com/Penation/lvr.git
   REPO_REF: main
   REPO_DIR: /scratch/lvr
@@ -68,13 +68,18 @@ jobs:
       - test -d ${DATA_ROOT}/Visual-CoT/images/cot_image_data
       - mkdir -p ${OUTPUT_ROOT}/stage1 ${CACHE_ROOT}/hf
       - >-
-        conda run --no-capture-output -n ${CONDA_ENV}
         bash -lc 'set -euo pipefail &&
+        ENV_PREFIX=$${HOME}/.conda/envs/${CONDA_ENV} &&
+        test -x $$ENV_PREFIX/bin/python &&
+        test -x $$ENV_PREFIX/bin/deepspeed &&
+        $$ENV_PREFIX/bin/python -c "import sys, torch, transformers, deepspeed; print(\"train python\", sys.executable); print(\"versions\", torch.__version__, transformers.__version__, deepspeed.__version__)" &&
+        head -1 $$ENV_PREFIX/bin/deepspeed &&
         cd ${REPO_DIR} &&
+        export PATH=$$ENV_PREFIX/bin:$${PATH} &&
         export PYTHONPATH=$$PWD:$$PWD/src:$${PYTHONPATH:-} &&
         export WANDB_MODE=offline &&
         export CACHE_DIR=${CACHE_ROOT}/hf &&
-        python -m deepspeed.launcher.runner --num_gpus=${GPUS} src/train/train_lvr.py
+        $$ENV_PREFIX/bin/deepspeed --num_gpus=${GPUS} src/train/train_lvr.py
         --run_name "Stage1_8xA10040_mseLVRLossLambda0.1-MaxVisToken5120-MinVisToken128"
         --coconut True
         --loss_lvr_fct mse

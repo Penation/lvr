@@ -81,8 +81,8 @@ deepspeed --num_gpus=${GPUS} src/train/train_lvr.py \
   --num_train_epochs 1 \
   --per_device_train_batch_size 1 \
   --gradient_accumulation_steps 8 \
-  --image_min_pixels $((128 * 28 * 28)) \
-  --image_max_pixels $((5120 * 28 * 28)) \
+  --image_min_pixels 100352 \
+  --image_max_pixels 4014080 \
   --weight_decay 0.1 \
   --warmup_ratio 0.03 \
   --lr_scheduler_type cosine \
@@ -96,7 +96,7 @@ deepspeed --num_gpus=${GPUS} src/train/train_lvr.py \
   --save_total_limit 10 \
   --dataloader_num_workers 8 \
   --enable_data_packing True \
-  --max_packed_tokens $((4 * 4096)) \
+  --max_packed_tokens 16384 \
   --random_seed 42 \
   --long_seq_threshold 4096 \
   --max_instance_per_batch 4

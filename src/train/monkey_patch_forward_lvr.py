@@ -1,9 +1,13 @@
 import torch
-from typing import Optional, List, Union, Tuple
+from typing import Optional, List, Union, Tuple, Any
 from torch.nn import CrossEntropyLoss, MSELoss, L1Loss
 import numpy as np
 import transformers.models.qwen2_5_vl.modeling_qwen2_5_vl
-from transformers.utils import is_torchdynamo_compiling,TransformersKwargs
+from transformers.utils import is_torchdynamo_compiling
+try:
+    from transformers.utils import TransformersKwargs
+except ImportError:  # transformers<=4.51 does not export this typing alias
+    TransformersKwargs = Any
 from transformers.processing_utils import Unpack
 from src.constants import IGNORE_INDEX
 import torch.distributed as dist

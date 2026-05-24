@@ -4,7 +4,7 @@ env_defaults:
   NODES: 1
   GPUS: 8
   MEM: 40
-  JOB_NAME: lvr-stage1-1node8gpu-a10040-no-flash
+  JOB_NAME: lvr-stage1-1node8gpu-a10040-no-flash-v2
   REPO_URL: https://github.com/Penation/lvr.git
   REPO_REF: main
   REPO_DIR: /scratch/lvr
@@ -71,7 +71,7 @@ jobs:
         conda run --no-capture-output -n ${CONDA_ENV}
         bash -lc 'set -euo pipefail &&
         cd ${REPO_DIR} &&
-        export PYTHONPATH=$$PWD:$$PWD/src:$$PYTHONPATH &&
+        export PYTHONPATH=$$PWD:$$PWD/src:$${PYTHONPATH:-} &&
         export WANDB_MODE=offline &&
         export CACHE_DIR=${CACHE_ROOT}/hf &&
         deepspeed --num_gpus=${GPUS} src/train/train_lvr.py

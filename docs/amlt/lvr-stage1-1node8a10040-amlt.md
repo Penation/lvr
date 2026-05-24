@@ -54,7 +54,7 @@ The actual training command is the same shape as the local command, adapted to 8
 
 ```bash
 cd ${REPO_DIR}
-export PYTHONPATH=$PWD:$PWD/src:$PYTHONPATH
+export PYTHONPATH=$PWD:$PWD/src:${PYTHONPATH:-}
 export WANDB_MODE=offline
 export CACHE_DIR=${CACHE_ROOT}/hf
 

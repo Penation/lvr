@@ -36,12 +36,10 @@ This repository contains a script for training [Latent Visual Reasoning](https:/
 
 ```bash
 conda env create -f environment.yaml
-conda activate train
-pip install qwen-vl-utils
-pip install flash-attn --no-build-isolation
+conda activate lvr_train
 ```
 
-**Note:** You should install flash-attn after installing the other packages.<br>
+**Note:** Flash Attention is optional. This fork is validated without `flash-attn`; pass `--disable_flash_attn2 True` when training on environments where Flash Attention is unavailable or ABI-incompatible.<br>
 **Note:** This project is forked from [Qwen2-VL-Finetune](https://github.com/2U1/Qwen2-VL-Finetune) where you can find more instructions on environments.
 
 ## Model Weights

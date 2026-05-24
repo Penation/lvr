@@ -14,7 +14,7 @@ from src.constants import (
     SYSTEM_MESSAGE,
 )
 
-from .data_utils import get_image_info, get_video_info, pad_sequence, replace_image_tokens
+from .data_utils import get_image_info, get_video_info, pad_sequence, replace_image_tokens, resolve_media_path
 
 
 class DPODataset(Dataset):
@@ -72,9 +72,7 @@ class DPODataset(Dataset):
             images = []
             
             for image_file in image_files:
-                if not os.path.exists(image_file):
-                    if not image_file.startswith("http"):
-                        image_file = os.path.join(image_folder, image_file)
+                image_file = resolve_media_path(image_file, image_folder)
                 images.append(get_image_info(image_file, self.image_min_pixel, self.image_max_pixel, self.image_resized_w, self.image_resized_h))
 
         elif "video" in sources:

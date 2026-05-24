@@ -1,0 +1,18 @@
+
+# Python/cache artifacts
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Training/runtime outputs
+wandb/
+tf-logs/
+stage1_checkpoints/
+stage2_checkpoints*/
+checkpoints/
+outputs/
+*.log
+
+# Local datasets and downloaded archives
+data/lvr_data/
+lvr_data.zip

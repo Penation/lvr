@@ -1,0 +1,119 @@
+description: LVR Stage-1 SFT from GitHub on Singularity (1 node x 8xA100-40G, no flash-attn)
+
+env_defaults:
+  NODES: 1
+  GPUS: 8
+  MEM: 40
+  JOB_NAME: lvr-stage1-1node8gpu-a10040-no-flash
+  REPO_URL: https://github.com/Penation/lvr.git
+  REPO_REF: main
+  REPO_DIR: /scratch/lvr
+  CONDA_ENV: lvr_train
+  DATA_ROOT: /mnt/lvr/dataset
+  OUTPUT_ROOT: /mnt/lvr/lvr_runs
+  CACHE_ROOT: /mnt/lvr/lvr_cache
+  MAX_STEPS: 2500
+  GRAD_ACCUM_STEPS: 8
+  DATALOADER_WORKERS: 8
+  MASTER_PORT: 29500
+
+target:
+  service: sing
+  workspace_name: gcr-singularity-resrch
+  name: msrresrchvc
+
+storage:
+  lvr:
+    storage_account_name: azsussc
+    container_name: amulet
+    mount_dir: /mnt/lvr
+
+environment:
+  image: amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04
+  setup:
+    - set -euo pipefail
+    - rm -rf ${REPO_DIR}
+    - git clone ${REPO_URL} ${REPO_DIR}
+    - git -C ${REPO_DIR} checkout ${REPO_REF}
+    - conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
+    - conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
+    - conda env create -f ${REPO_DIR}/environment.yaml
+    - conda run --no-capture-output -n ${CONDA_ENV} python -m pip install --upgrade pip setuptools wheel
+    - conda run --no-capture-output -n ${CONDA_ENV} python -c "import torch, transformers, deepspeed, trl, qwen_vl_utils; print('env ok', torch.__version__, torch.cuda.is_available())"
+
+code:
+  local_dir: $CONFIG_DIR/
+
+data:
+  storage_id: lvr
+
+jobs:
+  - name: ${JOB_NAME}
+    sku: ${NODES}x${MEM}G${GPUS}-A100
+    process_count_per_node: 1
+    sla_tier: Premium
+    execution_mode: basic
+    identity: managed
+    submit_args:
+      env:
+        AMLT_DOCKERFILE_TEMPLATE: default
+        SHARED_MEMORY_PERCENT: 0.5
+        PYTHONUNBUFFERED: "1"
+        TOKENIZERS_PARALLELISM: "false"
+        MASTER_PORT: ${MASTER_PORT}
+    command:
+      - nvidia-smi
+      - df -h
+      - test -f ${DATA_ROOT}/Visual-CoT/annotations/meta_data_lvr_sft_stage1.local.json
+      - test -d ${DATA_ROOT}/Visual-CoT/images/cot_image_data
+      - mkdir -p ${OUTPUT_ROOT}/stage1 ${CACHE_ROOT}/hf
+      - >-
+        conda run --no-capture-output -n ${CONDA_ENV}
+        bash -lc 'set -euo pipefail &&
+        cd ${REPO_DIR} &&
+        export PYTHONPATH=$PWD:$PWD/src:$PYTHONPATH &&
+        export WANDB_MODE=offline &&
+        export CACHE_DIR=${CACHE_ROOT}/hf &&
+        deepspeed --num_gpus=${GPUS} src/train/train_lvr.py
+        --run_name "Stage1_8xA10040_mseLVRLossLambda0.1-MaxVisToken5120-MinVisToken128"
+        --coconut True
+        --loss_lvr_fct mse
+        --deepspeed scripts/zero3_offload.json
+        --model_id Qwen/Qwen2.5-VL-7B-Instruct
+        --data_path ${DATA_ROOT}/Visual-CoT/annotations/meta_data_lvr_sft_stage1.local.json
+        --remove_unused_columns False
+        --lvr_head False
+        --freeze_vision_tower True
+        --freeze_merger True
+        --freeze_llm False
+        --max_steps ${MAX_STEPS}
+        --learning_rate 1e-5
+        --loss_lvr_lambda 0.1
+        --bf16 True
+        --fp16 False
+        --disable_flash_attn2 True
+        --online_checkpoint False
+        --output_dir ${OUTPUT_ROOT}/stage1
+        --num_train_epochs 1
+        --per_device_train_batch_size 1
+        --gradient_accumulation_steps ${GRAD_ACCUM_STEPS}
+        --image_min_pixels $((128 * 28 * 28))
+        --image_max_pixels $((5120 * 28 * 28))
+        --weight_decay 0.1
+        --warmup_ratio 0.03
+        --lr_scheduler_type cosine
+        --logging_steps 1
+        --tf32 False
+        --gradient_checkpointing True
+        --report_to none
+        --lazy_preprocess True
+        --save_strategy steps
+        --save_steps 500
+        --save_total_limit 10
+        --dataloader_num_workers ${DATALOADER_WORKERS}
+        --enable_data_packing True
+        --max_packed_tokens $((4 * 4096))
+        --random_seed 42
+        --long_seq_threshold 4096
+        --max_instance_per_batch 4
+        2>&1 | tee -a ${OUTPUT_ROOT}/${JOB_NAME}.log'

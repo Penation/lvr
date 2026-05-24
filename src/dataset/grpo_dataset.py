@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 
 from src.params import DataArguments
 from src.constants import SYSTEM_MESSAGE
+from .data_utils import resolve_media_path
 
 import re
 
@@ -116,9 +117,7 @@ class GRPODataset(Dataset):
                 image_files = [image_files]
             
             for image_file in image_files:
-                if not os.path.exists(image_file):
-                    if not image_file.startswith("http"):
-                        image_file = os.path.join(image_folder, image_file)
+                image_file = resolve_media_path(image_file, image_folder)
                 contents.append(get_image_content(image_file, self.image_min_pixel, self.image_max_pixel, self.image_resized_w, self.image_resized_h))
 
         elif "video" in sources:

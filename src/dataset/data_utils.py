@@ -1,3 +1,4 @@
+import os
 import re
 import torch
 
@@ -18,6 +19,49 @@ from src.constants import (
     LVR_PLACEHOLDER,
 
 )
+
+
+def resolve_media_path(media_path, image_folder=None):
+    """Resolve dataset media paths across the readable local dataset layout.
+
+    LVR annotations use legacy relative prefixes such as ``viscot/...`` and
+    ``ViRL39K/...``.  Locally we keep datasets under:
+      /datadisk/dataset/Visual-CoT/{annotations,images}
+      /datadisk/dataset/ViRL39K/{annotations,images}
+    This helper preserves normal absolute/http paths and falls back to those
+    dataset-specific image roots before returning the original joined path.
+    """
+    if media_path is None or str(media_path).startswith("http"):
+        return media_path
+
+    media_path = str(media_path)
+    candidates = []
+
+    if os.path.exists(media_path):
+        return media_path
+
+    if image_folder:
+        candidates.append(os.path.join(image_folder, media_path))
+
+    if media_path.startswith("viscot/"):
+        rel = media_path[len("viscot/"):]
+        if image_folder:
+            candidates.append(os.path.join(image_folder, "cot_image_data", rel))
+        candidates.extend([
+            os.path.join("/datadisk/dataset/Visual-CoT/images", rel),
+            os.path.join("/datadisk/dataset/Visual-CoT/images/cot_image_data", rel),
+        ])
+    elif media_path.startswith("ViRL39K/"):
+        rel = media_path[len("ViRL39K/"):]
+        if image_folder:
+            candidates.append(os.path.join(image_folder, rel))
+        candidates.append(os.path.join("/datadisk/dataset/ViRL39K/images", rel))
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+
+    return candidates[0] if candidates else media_path
 
 
 def replace_image_tokens(input_string, is_video=False):

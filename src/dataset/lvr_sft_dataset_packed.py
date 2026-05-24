@@ -27,7 +27,7 @@ from src.constants import (
 )
 from transformers import TrainingArguments
 
-from .data_utils import get_image_info, llava_to_openai_lvr, pad_sequence
+from .data_utils import get_image_info, llava_to_openai_lvr, pad_sequence, resolve_media_path
 import numpy as np
 from PIL import Image
 from typing import List, Tuple
@@ -255,9 +255,7 @@ class IterableSupervisedDatasetLVR(Dataset):
             images = []
 
             for image_file in image_files:
-                if not os.path.exists(image_file):
-                    if not image_file.startswith("http"):
-                        image_file = os.path.join(image_folder, image_file)
+                image_file = resolve_media_path(image_file, image_folder)
                 images.append(get_image_info(image_file, self.image_min_pixel, self.image_max_pixel, self.image_resized_w, self.image_resized_h))
 
             # Extract LVR tokens

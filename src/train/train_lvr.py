@@ -1,5 +1,6 @@
 import sys
 import os
+import pathlib
 
 import os
 import torch
@@ -235,7 +236,10 @@ def train():
         **data_module
     )
 
-    trainer.train()
+    if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
+        trainer.train(resume_from_checkpoint=True)
+    else:
+        trainer.train()
 
     trainer.save_state()
 

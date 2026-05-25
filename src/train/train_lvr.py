@@ -32,6 +32,57 @@ def set_requires_grad(parameters, requires_grad):
     for p in parameters:
         p.requires_grad = requires_grad
 
+def _checkpoint_step(checkpoint_dir: pathlib.Path) -> int:
+    try:
+        return int(checkpoint_dir.name.rsplit("-", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+def _is_resumable_checkpoint(checkpoint_dir: pathlib.Path):
+    if not checkpoint_dir.is_dir():
+        return False, "not a directory"
+
+    trainer_state = checkpoint_dir / "trainer_state.json"
+    if not trainer_state.exists() or trainer_state.stat().st_size == 0:
+        return False, "missing or empty trainer_state.json"
+
+    zero_dirs = sorted(p for p in checkpoint_dir.glob("global_step*") if p.is_dir())
+    if not zero_dirs:
+        return True, "regular HF checkpoint"
+
+    latest = checkpoint_dir / "latest"
+    if not latest.exists() or latest.stat().st_size == 0:
+        return False, "missing or empty DeepSpeed latest tag"
+
+    zero_pt_files = []
+    for zero_dir in zero_dirs:
+        zero_pt_files.extend(zero_dir.glob("*.pt"))
+    if not zero_pt_files:
+        return False, "missing DeepSpeed ZeRO state files"
+
+    empty_files = [str(path.relative_to(checkpoint_dir)) for path in zero_pt_files if path.stat().st_size == 0]
+    if empty_files:
+        preview = ", ".join(empty_files[:4])
+        if len(empty_files) > 4:
+            preview += f", ... (+{len(empty_files) - 4} more)"
+        return False, f"empty DeepSpeed ZeRO state file(s): {preview}"
+
+    return True, "complete DeepSpeed checkpoint"
+
+
+def find_resumable_checkpoint(output_dir):
+    output_path = pathlib.Path(output_dir)
+    checkpoints = sorted(output_path.glob("checkpoint-*"), key=_checkpoint_step, reverse=True)
+    for checkpoint in checkpoints:
+        ok, reason = _is_resumable_checkpoint(checkpoint)
+        if ok:
+            rank0_print(f"Resuming from checkpoint {checkpoint} ({reason})")
+            return str(checkpoint)
+        rank0_print(f"Skipping checkpoint {checkpoint}: {reason}")
+    return None
+
+
 def configure_vision_tower(model, training_args, compute_dtype, device):
     vision_tower = model.visual
     vision_tower.to(dtype=compute_dtype, device=device)
@@ -236,8 +287,9 @@ def train():
         **data_module
     )
 
-    if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
-        trainer.train(resume_from_checkpoint=True)
+    resume_checkpoint = find_resumable_checkpoint(training_args.output_dir)
+    if resume_checkpoint:
+        trainer.train(resume_from_checkpoint=resume_checkpoint)
     else:
         trainer.train()
 

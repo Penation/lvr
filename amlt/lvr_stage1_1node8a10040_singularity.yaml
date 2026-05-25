@@ -4,13 +4,14 @@ env_defaults:
   NODES: 1
   GPUS: 8
   MEM: 40
-  JOB_NAME: lvr-stage1-1node8gpu-a10040-no-flash-v18
+  JOB_NAME: lvr-stage1-1node8gpu-a10040-no-flash-v19
   REPO_URL: https://github.com/Penation/lvr.git
   REPO_REF: main
   REPO_DIR: /scratch/lvr
   CONDA_ENV: lvr_train
   DATA_ROOT: /mnt/lvr/2026vlm/datasets
   OUTPUT_ROOT: /mnt/lvr/2026vlm/ckpts/lvr
+  OUTPUT_SUBDIR: stage1-a10040-no-flash-v19
   CACHE_ROOT: /mnt/lvr/2026vlm/cache/lvr
   MAX_STEPS: 2500
   GRAD_ACCUM_STEPS: 8
@@ -72,7 +73,7 @@ jobs:
       - df -h
       - test -f ${DATA_ROOT}/Visual-CoT/annotations/meta_data_lvr_sft_stage1.local.json
       - test -d ${DATA_ROOT}/Visual-CoT/images/cot_image_data
-      - mkdir -p ${OUTPUT_ROOT}/stage1 ${CACHE_ROOT}/hf ${CACHE_ROOT}/run_data
+      - mkdir -p ${OUTPUT_ROOT}/${OUTPUT_SUBDIR} ${CACHE_ROOT}/hf ${CACHE_ROOT}/run_data
       - >-
         python -c 'import json; from pathlib import Path; src=Path("${DATA_ROOT}/Visual-CoT/annotations/meta_data_lvr_sft_stage1.local.json"); dst=Path("${CACHE_ROOT}/run_data/meta_data_lvr_sft_stage1.amlt.json"); data=json.load(open(src)); old="/datadisk/dataset"; new="${DATA_ROOT}"; [row.update({"data_path": row["data_path"].replace(old,new), "image_folder": row["image_folder"].replace(old,new)}) for row in data]; dst.parent.mkdir(parents=True, exist_ok=True); json.dump(data, open(dst,"w"), indent=2); print("wrote", dst); print(json.dumps(data, indent=2))'
       - test -f ${CACHE_ROOT}/run_data/meta_data_lvr_sft_stage1.amlt.json
@@ -109,7 +110,7 @@ jobs:
         --fp16 False
         --disable_flash_attn2 True
         --online_checkpoint False
-        --output_dir ${OUTPUT_ROOT}/stage1
+        --output_dir ${OUTPUT_ROOT}/${OUTPUT_SUBDIR}
         --num_train_epochs 1
         --per_device_train_batch_size 1
         --gradient_accumulation_steps ${GRAD_ACCUM_STEPS}

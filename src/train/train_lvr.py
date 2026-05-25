@@ -293,6 +293,8 @@ def train():
     else:
         trainer.train()
 
+    QwenLVRSFTTrainer.wait_for_checkpoint_uploads()
+
     trainer.save_state()
 
     model.config.use_cache = True

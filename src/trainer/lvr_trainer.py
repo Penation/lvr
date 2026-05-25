@@ -1,5 +1,6 @@
 import os
 import shutil
+import threading
 import torch
 import torch.nn as nn
 import wandb
@@ -31,6 +32,29 @@ def maybe_zero_3(param, ignore_status=False, name=None):
     return param
 
 class QwenLVRSFTTrainer(Trainer):
+
+    _checkpoint_upload_threads = []
+
+    @classmethod
+    def wait_for_checkpoint_uploads(cls):
+        for thread in list(cls._checkpoint_upload_threads):
+            thread.join()
+        cls._checkpoint_upload_threads.clear()
+
+    @staticmethod
+    def _copy_checkpoint_tree(output_dir, remote_checkpoint_dir, checkpoint_folder):
+        tmp_remote_dir = remote_checkpoint_dir + ".tmp"
+        if os.path.exists(tmp_remote_dir):
+            shutil.rmtree(tmp_remote_dir)
+        shutil.copytree(
+            output_dir,
+            tmp_remote_dir,
+            copy_function=lambda src, dst: shutil.copyfile(src, dst),
+        )
+        if os.path.exists(remote_checkpoint_dir):
+            shutil.rmtree(remote_checkpoint_dir)
+        os.replace(tmp_remote_dir, remote_checkpoint_dir)
+        print(f"Uploaded completed checkpoint {output_dir} -> {remote_checkpoint_dir}", flush=True)
 
     def __init__(self, *args, temp_folder=None, oci_handler=None, **kwargs):
         super(QwenLVRSFTTrainer, self).__init__(*args, **kwargs)
@@ -217,18 +241,15 @@ class QwenLVRSFTTrainer(Trainer):
         if checkpoint_upload_dir and self.args.should_save:
             remote_checkpoint_dir = os.path.join(checkpoint_upload_dir, checkpoint_folder)
             os.makedirs(checkpoint_upload_dir, exist_ok=True)
-            tmp_remote_dir = remote_checkpoint_dir + ".tmp"
-            if os.path.exists(tmp_remote_dir):
-                shutil.rmtree(tmp_remote_dir)
-            shutil.copytree(
-                output_dir,
-                tmp_remote_dir,
-                copy_function=lambda src, dst: shutil.copyfile(src, dst),
+            thread = threading.Thread(
+                target=self._copy_checkpoint_tree,
+                args=(output_dir, remote_checkpoint_dir, checkpoint_folder),
+                name=f"checkpoint-upload-{checkpoint_folder}",
+                daemon=False,
             )
-            if os.path.exists(remote_checkpoint_dir):
-                shutil.rmtree(remote_checkpoint_dir)
-            os.replace(tmp_remote_dir, remote_checkpoint_dir)
-            print(f"Uploaded completed checkpoint {output_dir} -> {remote_checkpoint_dir}", flush=True)
+            thread.start()
+            self._checkpoint_upload_threads.append(thread)
+            print(f"Started background checkpoint upload {output_dir} -> {remote_checkpoint_dir}", flush=True)
 
         if self.temp_folder:
             remote_chkpt_folder = os.path.join(self.args.remote_output_dir,checkpoint_folder)

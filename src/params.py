@@ -72,6 +72,7 @@ class TrainingArguments(HFTrainingArguments):
     online_checkpoint: Optional[bool] = False
     checkpoint_name:Optional[str] = None
     checkpoint_upload_dir: Optional[str] = field(default=None, metadata={"help": "Optional blob/mounted directory to receive each completed local checkpoint during training."})
+    skip_final_model_save: bool = field(default=False, metadata={"help": "Skip final full model export after trainer.train(); step checkpoints are still saved."})
     # data packing-related params
     enable_data_packing: bool = False
     max_packed_tokens:Optional[int] = None
@@ -139,6 +140,7 @@ class GRPOArguments(GRPOConfigTRL):
     online_checkpoint: Optional[bool] = False
     checkpoint_name:Optional[str] = None
     checkpoint_upload_dir: Optional[str] = field(default=None, metadata={"help": "Optional blob/mounted directory to receive each completed local checkpoint during training."})
+    skip_final_model_save: bool = field(default=False, metadata={"help": "Skip final full model export after trainer.train(); step checkpoints are still saved."})
     decoding_strategy:str = "steps"
     lvr_steps: int = 16
 

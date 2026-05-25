@@ -299,7 +299,10 @@ def train():
 
     model.config.use_cache = True
     
-    safe_save_model_for_hf_trainer(trainer, output_dir=training_args.output_dir)
+    if training_args.skip_final_model_save:
+        rank0_print("Skipping final full model export because --skip_final_model_save=True")
+    else:
+        safe_save_model_for_hf_trainer(trainer, output_dir=training_args.output_dir)
 
 
 

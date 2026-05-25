@@ -174,7 +174,12 @@ class QwenLVRSFTTrainer(Trainer):
         run_dir = self._get_output_dir(trial=trial)
         # output_dir is the local path forcheckpoint
         output_dir = os.path.join(run_dir, checkpoint_folder)
-        self.save_model(output_dir, _internal_call=True)
+        os.makedirs(output_dir, exist_ok=True)
+        # For DeepSpeed ZeRO training checkpoints, avoid saving full HF model shards at every save step.
+        # The resumable state is written below by _save_optimizer_and_scheduler plus trainer/RNG state.
+        # Final model export is still handled by safe_save_model_for_hf_trainer() after training.
+        if not self.is_deepspeed_enabled:
+            self.save_model(output_dir, _internal_call=True)
 
         if self.args.save_strategy in [SaveStrategy.STEPS, SaveStrategy.EPOCH] and self.state.best_global_step:
             best_checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.best_global_step}"

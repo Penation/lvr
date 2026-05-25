@@ -1,4 +1,5 @@
 import os
+import shutil
 import torch
 import torch.nn as nn
 import wandb
@@ -206,7 +207,24 @@ class QwenLVRSFTTrainer(Trainer):
         if self.args.push_to_hub:
             self._push_from_checkpoint(output_dir)
 
-        # output_dir is local; now we save to cloud if needed
+        # output_dir is local; now we save to cloud/blob if needed.
+        checkpoint_upload_dir = getattr(self.args, "checkpoint_upload_dir", None)
+        if checkpoint_upload_dir and self.args.should_save:
+            remote_checkpoint_dir = os.path.join(checkpoint_upload_dir, checkpoint_folder)
+            os.makedirs(checkpoint_upload_dir, exist_ok=True)
+            tmp_remote_dir = remote_checkpoint_dir + ".tmp"
+            if os.path.exists(tmp_remote_dir):
+                shutil.rmtree(tmp_remote_dir)
+            shutil.copytree(
+                output_dir,
+                tmp_remote_dir,
+                copy_function=lambda src, dst: shutil.copyfile(src, dst),
+            )
+            if os.path.exists(remote_checkpoint_dir):
+                shutil.rmtree(remote_checkpoint_dir)
+            os.replace(tmp_remote_dir, remote_checkpoint_dir)
+            print(f"Uploaded completed checkpoint {output_dir} -> {remote_checkpoint_dir}", flush=True)
+
         if self.temp_folder:
             remote_chkpt_folder = os.path.join(self.args.remote_output_dir,checkpoint_folder)
             if remote_chkpt_folder[0] == '/':
